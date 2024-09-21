@@ -7,6 +7,7 @@ from modules.federated_credential_parser import parse_subject_identifier
 from modules.graph_data import get_graph_data, get_federated_credentials
 from modules.arm_data import get_subscriptions, get_resource_groups, get_sub_role_assignment, get_rg_role_assignment, get_mg_role_assignment, get_management_groups
 import config
+from modules.attack_path_visualizer import create_attack_path_visualization
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -188,19 +189,50 @@ def create_aggregated_permissions_object(ra: Dict, app_info: ApplicationInfo) ->
     Returns:
         AggregatedPermissionsObject: An AggregatedPermissionsObject containing the role assignment and application info.
     """
+    # Extract the subscription, resource group, and management group IDs
+    subscription_id = ra.get('subscriptionId')
+    resource_group_id = ra.get('resourceGroupId')
+    management_group_id = ra.get('managementGroupId')
+
+    # Extract properties
+    properties = ra.get(PROPERTIES, {})
+    role_definition_id = properties.get('roleDefinitionId')
+    principal_id = properties.get(PRINCIPAL_ID)
+    scope = properties.get('scope')
+    created_on = properties.get('createdOn')
+    updated_on = properties.get('updatedOn')
+    scope_type = ra.get('scope_type')
+
+    # Determine scope_type based on the scope field
+    if scope:
+        if 'managementGroups' in scope:
+            scope_type = 'managementGroup'
+        elif 'resourceGroups' in scope:
+            scope_type = 'resourceGroup'
+        elif 'subscriptions' in scope:
+            scope_type = 'subscription'
+        else:
+            scope_type = 'unknown'
+    else:
+        scope_type = 'unknown'
+
+    # Create RoleAssignment object
     role_assignment = RoleAssignment(
-        subscription_id=ra.get('subscriptionId'),
-        resource_group_id=ra.get('resourceGroupId'),
-        management_group_id=ra.get('managementGroupId'),
-        role_definition_id=ra.get(PROPERTIES, {}).get('roleDefinitionId'),
-        principal_id=ra.get(PROPERTIES, {}).get(PRINCIPAL_ID),
-        scope=ra.get(PROPERTIES, {}).get('scope'),
-        created_on=ra.get(PROPERTIES, {}).get('createdOn'),
-        updated_on=ra.get(PROPERTIES, {}).get('updatedOn'),
+        subscription_id=subscription_id,
+        resource_group_id=resource_group_id,
+        management_group_id=management_group_id,
+        role_definition_id=role_definition_id,
+        principal_id=principal_id,
+        scope=scope,
+        created_on=created_on,
+        updated_on=updated_on,
         app_id=app_info.id,
         app_display_name=app_info.displayName,
         enterprise_app_id=app_info.enterprise_object_id,
+        scope_type=scope_type
     )
+
+    # Return AggregatedPermissionsObject
     return AggregatedPermissionsObject(role_assignment, app_info)
 
 def match_role_assignments(role_assignments: List[Dict], app_infos: Dict[str, ApplicationInfo]) -> List[AggregatedPermissionsObject]:
@@ -267,9 +299,16 @@ def main():
 
         logger.info("AggregatedPermissionsObject:")
         pprint(matched_role_assignments)
-
     except Exception as e:
         logger.error(f"An unexpected error occurred: {str(e)}")
+
+    logger.info("Creating attack path visualization and generating narratives...")
+    visualizer, narratives = create_attack_path_visualization(matched_role_assignments)
+
+    # Trigger the narration before visualization
+    print("\nDetailed Attack Path Narratives:")
+    for i, narrative in enumerate(narratives, 1):
+        print(f"Attack Path {i}:\n{narrative}\n")
 
 if __name__ == "__main__":
     main()
