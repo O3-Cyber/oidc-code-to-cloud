@@ -8,22 +8,31 @@ Class to authenticate to Azure REST and Microsoft Graph.
 Example for getting all apps with Federated Credentials from Graph API: 
 ```python
 if __name__ == "__main__":
-    client_id = ""
-    client_credential = ""
-    tenant_id = ""
-    graph_auth_client = AuthClientGraph(client_id, client_credential, tenant_id)
-    arm_auth_client = AuthClientARM(client_id, client_credential, tenant_id)
+    graph_auth_client = AuthClientGraph(config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID)
+    arm_auth_client = AuthClientARM(config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID)
 
-apps = get_apps(graph_auth_client)
-for app in apps:
-    app_id = app.get('id')
-    app_info = {
-        'id': app_id,
-        'displayName': app.get('displayName'),
-        'appId': app.get('appId')
-    }
-    cred_data = get_federated_credentials(graph_auth_client, app_id)
-    if cred_data.get('value'):
-        print(f"Application Info: {app_info}")
-        pprint(cred_data.get('value'))
 ```
+Depends on config.py 
+
+```
+CLIENT_ID = ""
+CLIENT_CREDENTIAL = ""
+TENANT_ID = ""
+```
+
+## main.py 
+Main script to fetch and process service principal data, role assignments, and federated identity credentials. The end result stored in the dataclass AggregatedPermissionsObject.
+
+1. Fetches service principals.
+2. Fetches application information and federated identity credentials.
+3. Fetches role assignments for subscriptions, resource groups, and management groups.
+4. Matches role assignments with application information to create aggregated permissions objects, filtering for non-empty federated identity credentials.
+
+### /modules/graph_data.py
+Module to interact with Microsoft Graph API.
+
+### /modules/federated_credential_parser.py
+Module to parse the string for federated credentials found on Service Principals
+
+### /modules/arm_data.py
+Module to interact with Azure Resource Manager (ARM) API. Distinct functions for each of the API calls used.
