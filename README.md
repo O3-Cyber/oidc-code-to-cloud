@@ -12,8 +12,8 @@ if __name__ == "__main__":
     arm_auth_client = AuthClientARM(config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID)
 
 ```
-Depends on config.py 
 
+Depends on config.py 
 ```
 CLIENT_ID = ""
 CLIENT_CREDENTIAL = ""
@@ -36,3 +36,9 @@ Module to parse the string for federated credentials found on Service Principals
 
 ### /modules/arm_data.py
 Module to interact with Azure Resource Manager (ARM) API. Distinct functions for each of the API calls used.
+
+
+# Remaining:
+* Get data from GitHub using REST API and match the SubjectIdentifier to GitHub attributes
+* Consider if we want GitHub Controls in the first iteration or if we move to attack paths before we determine controls in GitHub.
+* 
