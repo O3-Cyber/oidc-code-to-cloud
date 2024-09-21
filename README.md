@@ -40,5 +40,5 @@ Module to interact with Azure Resource Manager (ARM) API. Distinct functions for
 
 # Remaining:
 * Get data from GitHub using REST API and match the SubjectIdentifier to GitHub attributes
-* Consider if we want GitHub Controls in the first iteration or if we move to attack paths before we determine controls in GitHub.
-* 
+* Consider if we want GitHub Controls in the first iteration or if we want to draw attack paths before we determine controls in GitHub.
+* Create a Function to determine weak configuration of FederatedCredentials and a Function to determine weak configuration of GitHub, example for GitHub (https://github.com/O3-Cyber/repoman/blob/main/package/config_scanner.py)
