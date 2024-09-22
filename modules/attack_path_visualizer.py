@@ -123,9 +123,13 @@ def parse_subject(subject: str) -> Dict[str, str]:
     Returns:
         Dict[str, str]: A dictionary of the parsed components.
     """
-    match = re.match(r"repo:(?P<org>[^/]+)/(?P<repo>[^:]+):(?P<type>[^:]+):(?P<value>.+)", subject)
+    # First, try to match the full format
+    match = re.match(r"repo:(?P<org>[^/]+)/(?P<repo>[^:]+):(?P<type>[^:]+)(:(?P<value>.+))?", subject)
     if match:
-        return match.groupdict()
+        parts = match.groupdict()
+        if parts['type'] == 'pull_request':
+            parts['value'] = '*'
+        return parts
     return {}
 
 def create_attack_path_visualization(aggregated_permissions: List[AggregatedPermissionsObject]):

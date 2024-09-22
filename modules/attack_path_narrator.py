@@ -99,7 +99,7 @@ class AttackPathNarrator:
         target_type = target_data['node_type']
 
         if source_type == 'github' and 'GitHub Repo' in source_data['label']:
-            return f"In the GitHub repository '{source_data['label']}', an action '{target_data['label']}' is triggered."
+            return f"In the GitHub repository '{source_data['label']}', the action '{target_data['label']}' allows invocation of the service principal."
         
         elif source_type == 'github' and target_type == 'entra':
             return f"The GitHub action '{source_data['label']}' uses a federated credential '{edge_data['label']}' to authenticate as the Enterprise Application '{target_data['label']}' in Entra ID."
