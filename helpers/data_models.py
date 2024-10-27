@@ -70,6 +70,7 @@ class RoleAssignment:
         app_id (str): The application ID.
         app_display_name (str): The display name of the application.
         enterprise_app_id (str): The enterprise application ID.
+        scope_type (str): The type of assignment scope, e.g., 'Subscription', 'ResourceGroup', 'ManagementGroup'.
     """
     subscription_id: str
     management_group_id: str
@@ -82,6 +83,7 @@ class RoleAssignment:
     app_id: str
     app_display_name: str
     enterprise_app_id: str
+    scope_type: str
 
 @dataclass
 class AggregatedPermissionsObject:

@@ -37,6 +37,11 @@ Module to parse the string for federated credentials found on Service Principals
 ### /modules/arm_data.py
 Module to interact with Azure Resource Manager (ARM) API. Distinct functions for each of the API calls used.
 
+### modules/attack_path_visualizer
+Module to visualize attack paths using networkx. 
+
+### modules/attack_path_narrator
+Module that narrates the attack paths using plain english.
 
 # Remaining:
 * Get data from GitHub using REST API and match the SubjectIdentifier to GitHub attributes
