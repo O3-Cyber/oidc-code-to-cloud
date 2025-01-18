@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional
+
 
 @dataclass
 class SubjectIdentifier:
@@ -12,10 +13,12 @@ class SubjectIdentifier:
         entity_type (str): The type of entity (e.g., branch, tag).
         entity_name (str): The name of the entity.
     """
+
     organization: str
     repository: str
     entity_type: str
     entity_name: str
+
 
 @dataclass
 class FederatedIdentityCredential:
@@ -29,11 +32,13 @@ class FederatedIdentityCredential:
         audiences (List[str]): The audiences for the credential.
         subject_identifier (Optional[SubjectIdentifier]): The parsed subject identifier.
     """
+
     name: str
     issuer: str
     subject: str
     audiences: List[str]
     subject_identifier: Optional[SubjectIdentifier] = None
+
 
 @dataclass
 class ApplicationInfo:
@@ -47,11 +52,15 @@ class ApplicationInfo:
         enterprise_object_id (Optional[str]): The enterprise object ID.
         federated_identity_credentials (List[FederatedIdentityCredential]): The list of federated identity credentials.
     """
+
     id: str
     displayName: str
     appId: str
     enterprise_object_id: Optional[str] = None
-    federated_identity_credentials: List[FederatedIdentityCredential] = field(default_factory=list)
+    federated_identity_credentials: List[FederatedIdentityCredential] = field(
+        default_factory=list
+    )
+
 
 @dataclass
 class RoleAssignment:
@@ -72,6 +81,7 @@ class RoleAssignment:
         enterprise_app_id (str): The enterprise application ID.
         scope_type (str): The type of assignment scope, e.g., 'Subscription', 'ResourceGroup', 'ManagementGroup'.
     """
+
     subscription_id: str
     management_group_id: str
     resource_group_id: str
@@ -85,6 +95,7 @@ class RoleAssignment:
     enterprise_app_id: str
     scope_type: str
 
+
 @dataclass
 class AggregatedPermissionsObject:
     """
@@ -94,5 +105,6 @@ class AggregatedPermissionsObject:
         role_assignment (RoleAssignment): The role assignment class.
         app_info (ApplicationInfo): The application information.
     """
+
     role_assignment: RoleAssignment
     app_info: ApplicationInfo

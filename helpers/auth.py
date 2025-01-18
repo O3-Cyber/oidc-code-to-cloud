@@ -1,5 +1,5 @@
 import msal
-from azure.identity import DefaultAzureCredential
+
 
 class AuthClientBase:
     """
@@ -23,7 +23,7 @@ class AuthClientBase:
         self.app = msal.ConfidentialClientApplication(
             client_id=client_id,
             client_credential=client_credential,
-            authority=f'https://login.microsoftonline.com/{tenant_id}'
+            authority=f"https://login.microsoftonline.com/{tenant_id}",
         )
         self.scope = scope
 
@@ -40,11 +40,12 @@ class AuthClientBase:
         result = self.app.acquire_token_silent(scopes=[self.scope], account=None)
         if not result:
             result = self.app.acquire_token_for_client(scopes=[self.scope])
-        
+
         if "access_token" in result:
             return result["access_token"]
         else:
             raise Exception("Failed to obtain access token")
+
 
 class AuthClientGraph(AuthClientBase):
     """
@@ -60,7 +61,13 @@ class AuthClientGraph(AuthClientBase):
             client_credential (str): The client secret or certificate of the application.
             tenant_id (str): The tenant ID of the Azure Active Directory.
         """
-        super().__init__(client_id, client_credential, tenant_id, "https://graph.microsoft.com/.default")
+        super().__init__(
+            client_id,
+            client_credential,
+            tenant_id,
+            "https://graph.microsoft.com/.default",
+        )
+
 
 class AuthClientARM(AuthClientBase):
     """
@@ -76,4 +83,9 @@ class AuthClientARM(AuthClientBase):
             client_credential (str): The client secret or certificate of the application.
             tenant_id (str): The tenant ID of the Azure Active Directory.
         """
-        super().__init__(client_id, client_credential, tenant_id, "https://management.azure.com/.default")
+        super().__init__(
+            client_id,
+            client_credential,
+            tenant_id,
+            "https://management.azure.com/.default",
+        )
