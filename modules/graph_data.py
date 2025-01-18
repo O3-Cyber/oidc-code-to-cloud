@@ -1,5 +1,6 @@
 import requests
 
+
 def get_graph_data(auth_client, endpoint):
     """
     Fetch data from the Microsoft Graph API.
@@ -13,14 +14,15 @@ def get_graph_data(auth_client, endpoint):
     """
     token = auth_client.get_token()
     url = f"https://graph.microsoft.com/v1.0/{endpoint}"
-    headers = {'Authorization': f'Bearer {token}'}
+    headers = {"Authorization": f"Bearer {token}"}
     data = []
     while url:
         response = requests.get(url, headers=headers)
         response_data = response.json()
-        data.extend(response_data.get('value', []))
-        url = response_data.get('@odata.nextLink')
+        data.extend(response_data.get("value", []))
+        url = response_data.get("@odata.nextLink")
     return data
+
 
 def get_federated_credentials(auth_client, app_id):
     """
@@ -33,4 +35,6 @@ def get_federated_credentials(auth_client, app_id):
     Returns:
         List[Dict]: A list of dictionaries containing the federated identity credentials.
     """
-    return get_graph_data(auth_client, f"applications/{app_id}/federatedIdentityCredentials")
+    return get_graph_data(
+        auth_client, f"applications/{app_id}/federatedIdentityCredentials"
+    )
