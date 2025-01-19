@@ -80,6 +80,7 @@ class RoleAssignment:
         app_display_name (str): The display name of the application.
         enterprise_app_id (str): The enterprise application ID.
         scope_type (str): The type of assignment scope, e.g., 'Subscription', 'ResourceGroup', 'ManagementGroup'.
+        role_name (str): The name of the role.
     """
 
     subscription_id: str
@@ -94,6 +95,7 @@ class RoleAssignment:
     app_display_name: str
     enterprise_app_id: str
     scope_type: str
+    role_name: str  # Add this line
 
 
 @dataclass

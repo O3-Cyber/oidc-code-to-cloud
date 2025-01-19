@@ -1,7 +1,14 @@
 import requests
+import asyncio
+import aiohttp
+from typing import List, Dict
 
+async def fetch_data(session: aiohttp.ClientSession, url: str, headers: Dict[str, str]) -> Dict:
+    async with session.get(url, headers=headers) as response:
+        response.raise_for_status()
+        return await response.json()
 
-def get_graph_data(auth_client, endpoint):
+async def get_graph_data(auth_client, endpoint):
     """
     Fetch data from the Microsoft Graph API.
 
@@ -16,15 +23,19 @@ def get_graph_data(auth_client, endpoint):
     url = f"https://graph.microsoft.com/v1.0/{endpoint}"
     headers = {"Authorization": f"Bearer {token}"}
     data = []
-    while url:
-        response = requests.get(url, headers=headers)
-        response_data = response.json()
-        data.extend(response_data.get("value", []))
-        url = response_data.get("@odata.nextLink")
+
+    async with aiohttp.ClientSession() as session:
+        while url:
+            try:
+                response_data = await fetch_data(session, url, headers)
+                data.extend(response_data.get("value", []))
+                url = response_data.get("@odata.nextLink")
+            except aiohttp.ClientError as e:
+                print(f"Error fetching data from {url}: {str(e)}")
+                break
     return data
 
-
-def get_federated_credentials(auth_client, app_id):
+async def get_federated_credentials(auth_client, app_id):
     """
     Fetch federated identity credentials for a specific application.
 
@@ -35,6 +46,4 @@ def get_federated_credentials(auth_client, app_id):
     Returns:
         List[Dict]: A list of dictionaries containing the federated identity credentials.
     """
-    return get_graph_data(
-        auth_client, f"applications/{app_id}/federatedIdentityCredentials"
-    )
+    return await get_graph_data(auth_client, f"applications/{app_id}/federatedIdentityCredentials")

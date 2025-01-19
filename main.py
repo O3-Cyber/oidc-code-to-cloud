@@ -1,6 +1,7 @@
 import logging
+import asyncio
 from typing import List, Dict
-from pprint import pprint
+import aiohttp
 from helpers.auth import AuthClientGraph, AuthClientARM
 from helpers.data_models import (
     FederatedIdentityCredential,
@@ -18,8 +19,10 @@ from modules.arm_data import (
     get_mg_role_assignment,
     get_management_groups,
 )
+from modules.neo4j_graph import Neo4jGraph
+from modules.attack_path_visualizer import parse_subject, create_attack_path_visualization
 import config
-from modules.attack_path_visualizer import create_attack_path_visualization
+from pprint import pprint
 
 # Configure logging
 logging.basicConfig(
@@ -34,26 +37,77 @@ DISPLAY_NAME = "displayName"
 PROPERTIES = "properties"
 PRINCIPAL_ID = "principalId"
 
-
-def fetch_data(auth_client, endpoint: str) -> List[Dict]:
+async def fetch_data(auth_client, endpoint: str, api_type: str = "graph") -> List[Dict]:
     """
     Fetch data from a specified endpoint using the provided authentication client.
 
     Args:
         auth_client: The authentication client to use for fetching data.
         endpoint (str): The endpoint to fetch data from.
+        api_type (str): The type of API to use ('graph' or 'arm').
 
     Returns:
         List[Dict]: A list of dictionaries containing the fetched data.
     """
     try:
-        data = get_graph_data(auth_client, endpoint)
-        logger.info(f"Fetched data from {endpoint}: {data}")
+        if api_type == "graph":
+            data = await get_graph_data(auth_client, endpoint)
+        elif api_type == "arm":
+            data = await get_arm_data(auth_client, endpoint)
+        else:
+            raise ValueError("Invalid API type specified")
+        logger.info(f"Fetched {len(data)} records from {endpoint}")
         return data
     except Exception as e:
         logger.error(f"Error fetching data from {endpoint}: {str(e)}")
         return []
 
+async def get_arm_data(auth_client, endpoint):
+    """
+    Fetch data from the Azure Management API.
+
+    Args:
+        auth_client: The authentication client to use for fetching the token.
+        endpoint (str): The endpoint to fetch data from.
+
+    Returns:
+        List[Dict]: A list of dictionaries containing the fetched data.
+    """
+    token = auth_client.get_token()
+    url = f"https://management.azure.com/{endpoint}?api-version=2022-04-01"
+    headers = {"Authorization": f"Bearer {token}"}
+    data = []
+
+    async with aiohttp.ClientSession() as session:
+        while url:
+            try:
+                async with session.get(url, headers=headers) as response:
+                    response.raise_for_status()
+                    response_data = await response.json()
+                    data.extend(response_data.get("value", []))
+                    url = response_data.get("nextLink")
+            except aiohttp.ClientError as e:
+                logger.error(f"Error fetching data from {url}: {str(e)}")
+                break
+    return data
+
+async def fetch_and_parse_credentials(graph_auth_client: AuthClientGraph, app_id: str) -> List[FederatedIdentityCredential]:
+    try:
+        creds = await get_federated_credentials(graph_auth_client, app_id)
+        logger.debug(f"Fetched {len(creds)} credentials for app {app_id}")
+        return [
+            FederatedIdentityCredential(
+                name=cred["name"],
+                issuer=cred["issuer"],
+                subject=cred["subject"],
+                audiences=cred.get("audiences", []),
+                subject_identifier=parse_subject_identifier(cred["subject"]),
+            )
+            for cred in creds
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching credentials for app {app_id}: {str(e)}")
+        return []
 
 def create_service_principal_lookup(sps: List[Dict]) -> Dict[str, str]:
     """
@@ -66,22 +120,6 @@ def create_service_principal_lookup(sps: List[Dict]) -> Dict[str, str]:
         Dict[str, str]: A dictionary where the keys are application IDs and the values are service principal IDs.
     """
     return {sp[APP_ID]: sp[ID] for sp in sps}
-
-
-def get_service_principals(graph_auth_client: AuthClientGraph) -> Dict[str, str]:
-    """
-    Fetch service principals and create a lookup dictionary.
-
-    Args:
-        graph_auth_client (AuthClientGraph): The authentication client to use for fetching service principals.
-
-    Returns:
-        Dict[str, str]: A dictionary where the keys are application IDs and the values are service principal IDs.
-    """
-    sps = fetch_data(graph_auth_client, "servicePrincipals")
-    logger.info(f"Service Principals: {sps}")
-    return create_service_principal_lookup(sps)
-
 
 def create_app_info(app: Dict, sps: Dict[str, str]) -> ApplicationInfo:
     """
@@ -101,63 +139,121 @@ def create_app_info(app: Dict, sps: Dict[str, str]) -> ApplicationInfo:
         enterprise_object_id=sps.get(app[APP_ID]),
     )
 
-
-def fetch_and_parse_credentials(
-    graph_auth_client: AuthClientGraph, app_id: str
-) -> List[FederatedIdentityCredential]:
+def create_aggregated_permissions_object(
+    ra: Dict, app_info: ApplicationInfo
+) -> AggregatedPermissionsObject:
     """
-    Fetch and parse federated identity credentials for an application.
+    Create an AggregatedPermissionsObject from role assignment and application info.
 
     Args:
-        graph_auth_client (AuthClientGraph): The authentication client to use for fetching credentials.
-        app_id (str): The application ID to fetch credentials for.
+        ra (Dict): A dictionary representing a role assignment.
+        app_info (ApplicationInfo): An ApplicationInfo object containing application information.
 
     Returns:
-        List[FederatedIdentityCredential]: A list of FederatedIdentityCredential objects.
+        AggregatedPermissionsObject: An AggregatedPermissionsObject containing the role assignment and application info.
     """
-    creds = get_federated_credentials(graph_auth_client, app_id)
-    logger.debug(f"Credentials for app {app_id}: {creds}")
-    return [
-        FederatedIdentityCredential(
-            name=cred["name"],
-            issuer=cred["issuer"],
-            subject=cred["subject"],
-            audiences=cred.get("audiences", []),
-            subject_identifier=parse_subject_identifier(cred["subject"]),
-        )
-        for cred in creds
-    ]
+    # Extract the subscription, resource group, and management group IDs
+    subscription_id = ra.get("subscriptionId")
+    resource_group_id = ra.get("resourceGroupId")
+    management_group_id = ra.get("managementGroupId")
 
+    # Extract properties
+    properties = ra.get(PROPERTIES, {})
+    role_definition_id = properties.get("roleDefinitionId")
+    principal_id = properties.get(PRINCIPAL_ID)
+    scope = properties.get("scope")
+    created_on = properties.get("createdOn")
+    updated_on = properties.get("updatedOn")
+    scope_type = ra.get("scope_type")
 
-def get_app_infos(
-    graph_auth_client: AuthClientGraph, sps: Dict[str, str]
-) -> Dict[str, ApplicationInfo]:
+    # Determine scope_type based on the scope field
+    if scope:
+        if "managementGroups" in scope:
+            scope_type = "managementGroup"
+        elif "resourceGroups" in scope:
+            scope_type = "resourceGroup"
+        elif "subscriptions" in scope:
+            scope_type = "subscription"
+        else:
+            scope_type = "unknown"
+    else:
+        scope_type = "unknown"
+
+    # Extract role name from role definition ID or set to "Unknown Role"
+    role_name = role_definition_id.split("/")[-1] if role_definition_id else "Unknown Role"
+
+    # Create RoleAssignment object
+    role_assignment = RoleAssignment(
+        subscription_id=subscription_id,
+        resource_group_id=resource_group_id,
+        management_group_id=management_group_id,
+        role_definition_id=role_definition_id,
+        principal_id=principal_id,
+        scope=scope,
+        created_on=created_on,
+        updated_on=updated_on,
+        app_id=app_info.id,
+        app_display_name=app_info.displayName,
+        enterprise_app_id=app_info.enterprise_object_id,
+        scope_type=scope_type,
+        role_name=role_name  # Add role_name here
+    )
+
+    # Return AggregatedPermissionsObject
+    return AggregatedPermissionsObject(role_assignment, app_info)
+
+def match_role_assignments(
+    role_assignments: List[Dict], app_infos: Dict[str, ApplicationInfo]
+) -> List[AggregatedPermissionsObject]:
     """
-    Fetch application data and create ApplicationInfo objects, including federated identity credentials.
+    Match role assignments with application information to create aggregated permissions objects,
+    filtering for non-empty FederatedIdentityCredentials.
 
     Args:
-        graph_auth_client (AuthClientGraph): The authentication client to use for fetching application data.
-        sps (Dict[str, str]): A dictionary where the keys are application IDs and the values are service principal IDs.
+        role_assignments (List[Dict]): A list of dictionaries representing role assignments.
+        app_infos (Dict[str, ApplicationInfo]): A dictionary where the keys are application IDs and the values are ApplicationInfo objects.
 
     Returns:
-        Dict[str, ApplicationInfo]: A dictionary where the keys are application IDs and the values are ApplicationInfo objects.
+        List[AggregatedPermissionsObject]: A list of AggregatedPermissionsObject containing matched role assignments and application info,
+        only for apps with non-empty FederatedIdentityCredentials.
     """
-    app_infos = {}
-    apps = fetch_data(graph_auth_client, "applications")
-    logger.info(f"Applications: {apps}")
+    matched_role_assignments = []
+    processed_scopes = set()
 
-    for app in apps:
-        app_id = app[ID]
-        if app_id not in app_infos:
-            app_infos[app_id] = create_app_info(app, sps)
+    for ra in role_assignments:
+        principal_id = ra.get(PROPERTIES, {}).get(PRINCIPAL_ID)
+        scope = ra.get(PROPERTIES, {}).get("scope")
 
-        app_infos[app_id].federated_identity_credentials.extend(
-            fetch_and_parse_credentials(graph_auth_client, app_id)
+        if not principal_id or not scope:
+            continue  # Skip if principal_id or scope is not found
+        if (principal_id, scope) in processed_scopes:
+            continue  # Skip if the role assignment has already been processed
+
+        logger.info(
+            f"Matching role assignment with principal ID: {principal_id} and scope: {scope}"
         )
 
-    logger.info(f"App Infos: {app_infos}")
-    return app_infos
+        for app_info in app_infos.values():
+            if app_info.enterprise_object_id == principal_id:
+                if app_info.federated_identity_credentials:
+                    logger.info(
+                        f"Match found for principal ID: {principal_id} with non-empty FederatedIdentityCredentials"
+                    )
+                    aggregated_permissions_object = (
+                        create_aggregated_permissions_object(ra, app_info)
+                    )
+                    matched_role_assignments.append(aggregated_permissions_object)
+                else:
+                    logger.info(
+                        f"Match found for principal ID: {principal_id}, but FederatedIdentityCredentials is empty. Skipping."
+                    )
+                processed_scopes.add((principal_id, scope))
+                break
 
+    logger.info(
+        f"Matched Role Assignments (with non-empty FederatedIdentityCredentials): {matched_role_assignments}"
+    )
+    return matched_role_assignments
 
 def fetch_role_assignments(arm_auth_client: AuthClientARM) -> List[Dict]:
     """
@@ -215,122 +311,7 @@ def fetch_role_assignments(arm_auth_client: AuthClientARM) -> List[Dict]:
     logger.info(f"All Role Assignments: {role_assignments}")
     return role_assignments
 
-
-def create_aggregated_permissions_object(
-    ra: Dict, app_info: ApplicationInfo
-) -> AggregatedPermissionsObject:
-    """
-    Create an AggregatedPermissionsObject from role assignment and application info.
-
-    Args:
-        ra (Dict): A dictionary representing a role assignment.
-        app_info (ApplicationInfo): An ApplicationInfo object containing application information.
-
-    Returns:
-        AggregatedPermissionsObject: An AggregatedPermissionsObject containing the role assignment and application info.
-    """
-    # Extract the subscription, resource group, and management group IDs
-    subscription_id = ra.get("subscriptionId")
-    resource_group_id = ra.get("resourceGroupId")
-    management_group_id = ra.get("managementGroupId")
-
-    # Extract properties
-    properties = ra.get(PROPERTIES, {})
-    role_definition_id = properties.get("roleDefinitionId")
-    principal_id = properties.get(PRINCIPAL_ID)
-    scope = properties.get("scope")
-    created_on = properties.get("createdOn")
-    updated_on = properties.get("updatedOn")
-    scope_type = ra.get("scope_type")
-
-    # Determine scope_type based on the scope field
-    if scope:
-        if "managementGroups" in scope:
-            scope_type = "managementGroup"
-        elif "resourceGroups" in scope:
-            scope_type = "resourceGroup"
-        elif "subscriptions" in scope:
-            scope_type = "subscription"
-        else:
-            scope_type = "unknown"
-    else:
-        scope_type = "unknown"
-
-    # Create RoleAssignment object
-    role_assignment = RoleAssignment(
-        subscription_id=subscription_id,
-        resource_group_id=resource_group_id,
-        management_group_id=management_group_id,
-        role_definition_id=role_definition_id,
-        principal_id=principal_id,
-        scope=scope,
-        created_on=created_on,
-        updated_on=updated_on,
-        app_id=app_info.id,
-        app_display_name=app_info.displayName,
-        enterprise_app_id=app_info.enterprise_object_id,
-        scope_type=scope_type,
-    )
-
-    # Return AggregatedPermissionsObject
-    return AggregatedPermissionsObject(role_assignment, app_info)
-
-
-def match_role_assignments(
-    role_assignments: List[Dict], app_infos: Dict[str, ApplicationInfo]
-) -> List[AggregatedPermissionsObject]:
-    """
-    Match role assignments with application information to create aggregated permissions objects,
-    filtering for non-empty FederatedIdentityCredentials.
-
-    Args:
-        role_assignments (List[Dict]): A list of dictionaries representing role assignments.
-        app_infos (Dict[str, ApplicationInfo]): A dictionary where the keys are application IDs and the values are ApplicationInfo objects.
-
-    Returns:
-        List[AggregatedPermissionsObject]: A list of AggregatedPermissionsObject containing matched role assignments and application info,
-        only for apps with non-empty FederatedIdentityCredentials.
-    """
-    matched_role_assignments = []
-    processed_scopes = set()
-
-    for ra in role_assignments:
-        principal_id = ra.get(PROPERTIES, {}).get(PRINCIPAL_ID)
-        scope = ra.get(PROPERTIES, {}).get("scope")
-
-        if not principal_id or not scope:
-            continue  # Skip if principal_id or scope is not found
-        if (principal_id, scope) in processed_scopes:
-            continue  # Skip if the role assignment has already been processed
-
-        logger.info(
-            f"Matching role assignment with principal ID: {principal_id} and scope: {scope}"
-        )
-
-        for app_info in app_infos.values():
-            if app_info.enterprise_object_id == principal_id:
-                if app_info.federated_identity_credentials:
-                    logger.info(
-                        f"Match found for principal ID: {principal_id} with non-empty FederatedIdentityCredentials"
-                    )
-                    aggregated_permissions_object = (
-                        create_aggregated_permissions_object(ra, app_info)
-                    )
-                    matched_role_assignments.append(aggregated_permissions_object)
-                else:
-                    logger.info(
-                        f"Match found for principal ID: {principal_id}, but FederatedIdentityCredentials is empty. Skipping."
-                    )
-                processed_scopes.add((principal_id, scope))
-                break
-
-    logger.info(
-        f"Matched Role Assignments (with non-empty FederatedIdentityCredentials): {matched_role_assignments}"
-    )
-    return matched_role_assignments
-
-
-def main():
+async def main():
     """
     Main function to orchestrate the fetching and processing of data.
     """
@@ -343,10 +324,20 @@ def main():
         )
 
         logger.info("Fetching service principals...")
-        sps = get_service_principals(graph_auth_client)
+        sps = await fetch_data(graph_auth_client, "servicePrincipals")
+        sps_lookup = create_service_principal_lookup(sps)
 
         logger.info("Fetching application information...")
-        app_infos = get_app_infos(graph_auth_client, sps)
+        apps = await fetch_data(graph_auth_client, "applications")
+
+        app_infos = {}
+        for app in apps:
+            app_id = app[ID]
+            if app_id not in app_infos:
+                app_infos[app_id] = create_app_info(app, sps_lookup)
+            app_infos[app_id].federated_identity_credentials.extend(
+                await fetch_and_parse_credentials(graph_auth_client, app_id)
+            )
 
         logger.info("Fetching role assignments...")
         role_assignments = fetch_role_assignments(arm_auth_client)
@@ -356,17 +347,56 @@ def main():
 
         logger.info("AggregatedPermissionsObject:")
         pprint(matched_role_assignments)
+
+        logger.info("Creating attack path visualization...")
+        neo4j_graph = Neo4jGraph("bolt://localhost:7687", "neo4j", "password")  # Update connection details if necessary
+
+        for apo in matched_role_assignments:
+            ra = apo.role_assignment
+            app_info = apo.app_info
+
+            # Add nodes and edges to Neo4j
+            neo4j_graph.add_node(app_info.id, app_info.displayName, "entra", {"appId": app_info.appId, "roleName": ra.role_name})
+            for fc in app_info.federated_identity_credentials:
+                subject_parts = parse_subject(fc.subject)
+                if subject_parts:
+                    repo_id = f"{subject_parts['org']}/{subject_parts['repo']}"
+                    action_type = subject_parts["type"]
+                    action_value = subject_parts["value"]
+
+                    neo4j_graph.add_node(repo_id, f"GitHub Repo {repo_id}", "github")
+                    action_id = f"{repo_id}:{action_type}:{action_value}"
+                    neo4j_graph.add_node(action_id, f"Action {action_type} {action_value}", "github")
+                    neo4j_graph.add_edge(repo_id, action_id, "Triggers")
+                    neo4j_graph.add_edge(action_id, app_info.id, f"Federated Credential {fc.name}")
+
+            sp_id = app_info.enterprise_object_id
+            neo4j_graph.add_node(sp_id, f"Service Principal {app_info.displayName}", "entra", {"enterpriseObjectId": sp_id, "roleName": ra.role_name})
+            neo4j_graph.add_edge(app_info.id, sp_id, "Associated with")
+
+            scope_type = ra.scope_type
+            if "managementGroups" in ra.scope:
+                scope_id = ra.management_group_id or ra.scope.split("/")[-1]
+            elif "resourceGroups" in ra.scope:
+                scope_id = ra.resource_group_id or ra.scope.split("/")[-1]
+            elif "subscriptions" in ra.scope:
+                scope_id = ra.subscription_id or ra.scope.split("/")[-1]
+            else:
+                scope_id = "UnknownScope"
+
+            if scope_id != "Unknown":
+                scope_name = scope_id.split("/")[-1]
+            else:
+                scope_name = "Unknown"
+
+            neo4j_graph.add_node(scope_id, f"{scope_type} {scope_name}", "azure")
+            role_name = ra.role_definition_id.split("/")[-1] if ra.role_definition_id else "Unknown Role"
+            neo4j_graph.add_edge(sp_id, scope_id, f"Role: {role_name}", {"roleDefinitionId": ra.role_definition_id})
+
+        neo4j_graph.close()
+
     except Exception as e:
         logger.error(f"An unexpected error occurred: {str(e)}")
 
-    logger.info("Creating attack path visualization and generating narratives...")
-    visualizer, narratives = create_attack_path_visualization(matched_role_assignments)
-
-    # Trigger the narration before visualization
-    print("\nDetailed Attack Path Narratives:")
-    for i, narrative in enumerate(narratives, 1):
-        print(f"Attack Path {i}:\n{narrative}\n")
-
-
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

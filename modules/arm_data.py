@@ -1,7 +1,8 @@
 import requests
+from typing import List, Dict
 
 
-def get_management_groups(arm_auth_client):
+def get_management_groups(arm_auth_client) -> List[Dict]:
     """
     Fetch the list of management groups from the Azure Management API.
 
@@ -24,7 +25,7 @@ def get_management_groups(arm_auth_client):
         return []
 
 
-def get_subscriptions(arm_auth_client):
+def get_subscriptions(arm_auth_client) -> List[Dict]:
     """
     Fetch the list of subscriptions from the Azure Management API.
 
@@ -45,7 +46,7 @@ def get_subscriptions(arm_auth_client):
         return []
 
 
-def get_resource_groups(arm_auth_client, subscription):
+def get_resource_groups(arm_auth_client, subscription: str) -> List[Dict]:
     """
     Fetch the list of resource groups for a specific subscription from the Azure Management API.
 
@@ -69,7 +70,7 @@ def get_resource_groups(arm_auth_client, subscription):
         return []
 
 
-def get_sub_role_assignment(arm_auth_client, subscription):
+def get_sub_role_assignment(arm_auth_client, subscription: str) -> List[Dict]:
     """
     Fetch the list of role assignments for a specific subscription from the Azure Management API.
 
@@ -93,7 +94,7 @@ def get_sub_role_assignment(arm_auth_client, subscription):
         return []
 
 
-def get_rg_role_assignment(arm_auth_client, subscription, resource_group):
+def get_rg_role_assignment(arm_auth_client, subscription: str, resource_group: str) -> List[Dict]:
     """
     Fetch the list of role assignments for a specific resource group from the Azure Management API.
 
@@ -118,7 +119,7 @@ def get_rg_role_assignment(arm_auth_client, subscription, resource_group):
         return []
 
 
-def get_mg_role_assignment(arm_auth_client, management_group):
+def get_mg_role_assignment(arm_auth_client, management_group: str) -> List[Dict]:
     """
     Fetch the list of role assignments for a specific management group from the Azure Management API.
 
