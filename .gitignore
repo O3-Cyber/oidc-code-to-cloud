@@ -1,2 +1,5 @@
 oidc
 config.py
+cache/
+/venv/
+**/__pycache__/

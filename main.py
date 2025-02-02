@@ -1,7 +1,11 @@
 import logging
 import asyncio
-from typing import List, Dict
 import aiohttp
+import json
+import os
+import re
+import argparse
+from typing import List, Dict
 from helpers.auth import AuthClientGraph, AuthClientARM
 from helpers.data_models import (
     FederatedIdentityCredential,
@@ -9,19 +13,16 @@ from helpers.data_models import (
     RoleAssignment,
     AggregatedPermissionsObject,
 )
-from modules.federated_credential_parser import parse_subject_identifier
 from modules.graph_data import get_graph_data, get_federated_credentials
 from modules.arm_data import (
     get_subscriptions,
     get_resource_groups,
-    get_sub_role_assignment,
-    get_rg_role_assignment,
-    get_mg_role_assignment,
+    get_sub_role_assignments,
+    get_rg_role_assignments,
+    get_mg_role_assignments,
     get_management_groups,
 )
 from modules.neo4j_graph import Neo4jGraph
-from modules.attack_path_visualizer import parse_subject, create_attack_path_visualization
-import config
 from pprint import pprint
 
 # Configure logging
@@ -37,18 +38,33 @@ DISPLAY_NAME = "displayName"
 PROPERTIES = "properties"
 PRINCIPAL_ID = "principalId"
 
-async def fetch_data(auth_client, endpoint: str, api_type: str = "graph") -> List[Dict]:
-    """
-    Fetch data from a specified endpoint using the provided authentication client.
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-    Args:
-        auth_client: The authentication client to use for fetching data.
-        endpoint (str): The endpoint to fetch data from.
-        api_type (str): The type of API to use ('graph' or 'arm').
+def save_to_cache(filename: str, data: Dict):
+    with open(os.path.join(CACHE_DIR, filename), "w") as f:
+        json.dump(data, f)
 
-    Returns:
-        List[Dict]: A list of dictionaries containing the fetched data.
-    """
+def load_from_cache(filename: str) -> Dict:
+    filepath = os.path.join(CACHE_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decoding JSON from {filepath}: {str(e)}")
+                logger.error(f"File content: {f.read()}")
+                return {}
+    return {}
+
+async def fetch_data(auth_client, endpoint: str, api_type: str = "graph", use_cache: bool = True) -> List[Dict]:
+    cache_filename = f"{endpoint.replace('/', '_')}.json"
+    if use_cache:
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loaded {len(cached_data)} records from cache for {endpoint}")
+            return cached_data
+
     try:
         if api_type == "graph":
             data = await get_graph_data(auth_client, endpoint)
@@ -57,6 +73,7 @@ async def fetch_data(auth_client, endpoint: str, api_type: str = "graph") -> Lis
         else:
             raise ValueError("Invalid API type specified")
         logger.info(f"Fetched {len(data)} records from {endpoint}")
+        save_to_cache(cache_filename, data)
         return data
     except Exception as e:
         logger.error(f"Error fetching data from {endpoint}: {str(e)}")
@@ -91,20 +108,35 @@ async def get_arm_data(auth_client, endpoint):
                 break
     return data
 
-async def fetch_and_parse_credentials(graph_auth_client: AuthClientGraph, app_id: str) -> List[FederatedIdentityCredential]:
+async def fetch_and_parse_credentials(graph_auth_client: AuthClientGraph, app_id: str, use_cache: bool = True) -> List[FederatedIdentityCredential]:
+    cache_filename = "credentials_cache.json"
+    cached_data = load_from_cache(cache_filename)
+    
+    if use_cache and cached_data:
+        if app_id in cached_data:
+            logger.info(f"Loaded credentials from cache for app {app_id}")
+            return [FederatedIdentityCredential(**cred) for cred in cached_data[app_id]]
+
     try:
         creds = await get_federated_credentials(graph_auth_client, app_id)
         logger.debug(f"Fetched {len(creds)} credentials for app {app_id}")
-        return [
+        parsed_creds = [
             FederatedIdentityCredential(
                 name=cred["name"],
                 issuer=cred["issuer"],
                 subject=cred["subject"],
                 audiences=cred.get("audiences", []),
-                subject_identifier=parse_subject_identifier(cred["subject"]),
+                subject_identifier=FederatedIdentityCredential.parse_subject_identifier(cred["subject"]),
             )
             for cred in creds
         ]
+        
+        if not cached_data:
+            cached_data = {}
+        cached_data[app_id] = [cred.to_dict() for cred in parsed_creds]
+        save_to_cache(cache_filename, cached_data)
+        
+        return parsed_creds
     except Exception as e:
         logger.error(f"Error fetching credentials for app {app_id}: {str(e)}")
         return []
@@ -255,16 +287,24 @@ def match_role_assignments(
     )
     return matched_role_assignments
 
-def fetch_role_assignments(arm_auth_client: AuthClientARM) -> List[Dict]:
+def fetch_role_assignments(arm_auth_client: AuthClientARM, use_cache: bool = True) -> List[Dict]:
     """
     Fetch role assignments from ARM API for subscriptions, resource groups, and management groups.
 
     Args:
         arm_auth_client (AuthClientARM): The authentication client to use for fetching role assignments.
+        use_cache (bool): Whether to use cached data if available.
 
     Returns:
         List[Dict]: A list of dictionaries representing role assignments.
     """
+    cache_filename = "role_assignments.json"
+    if use_cache:
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loaded {len(cached_data)} role assignments from cache")
+            return cached_data
+
     role_assignments = []
 
     # Fetch subscriptions
@@ -273,22 +313,18 @@ def fetch_role_assignments(arm_auth_client: AuthClientARM) -> List[Dict]:
 
     for sub in subs:
         sub_id = sub.get(ID)
-        sub_role_assignments = get_sub_role_assignment(
-            arm_auth_client, subscription=sub_id
-        )
+        sub_role_assignments = get_sub_role_assignments(arm_auth_client, sub_id)
         logger.info(
             f"Role Assignments for subscription {sub_id}: {sub_role_assignments}"
         )
         role_assignments.extend(sub_role_assignments)
 
-        rgs = get_resource_groups(arm_auth_client, subscription=sub_id)
+        rgs = get_resource_groups(arm_auth_client, sub_id)
         logger.info(f"Resource Groups for subscription {sub_id}: {rgs}")
 
         for rg in rgs:
             rg_id = rg.get(ID)
-            rg_role_assignments = get_rg_role_assignment(
-                arm_auth_client, subscription=sub_id, resource_group=rg_id
-            )
+            rg_role_assignments = get_rg_role_assignments(arm_auth_client, sub_id, rg_id)
             logger.info(
                 f"Role Assignments for resource group {rg_id}: {rg_role_assignments}"
             )
@@ -300,35 +336,59 @@ def fetch_role_assignments(arm_auth_client: AuthClientARM) -> List[Dict]:
 
     for mg in mgs:
         mg_id = mg.get(ID)
-        mg_role_assignments = get_mg_role_assignment(
-            arm_auth_client, management_group=mg_id
-        )
+        mg_role_assignments = get_mg_role_assignments(arm_auth_client, mg_id)
         logger.info(
             f"Role Assignments for management group {mg_id}: {mg_role_assignments}"
         )
         role_assignments.extend(mg_role_assignments)
 
     logger.info(f"All Role Assignments: {role_assignments}")
+    save_to_cache(cache_filename, role_assignments)
     return role_assignments
+
+def parse_subject(subject: str) -> Dict[str, str]:
+    """
+    Parses a subject string into its components.
+
+    Args:
+        subject (str): The subject string to parse.
+
+    Returns:
+        Dict[str, str]: A dictionary of the parsed components.
+    """
+    match = re.match(
+        r"repo:(?P<org>[^/]+)/(?P<repo>[^:]+):(?P<type>[^:]+)(:(?P<value>.+))?", subject
+    )
+    if match:
+        parts = match.groupdict()
+        if parts["type"] == "pull_request":
+            parts["value"] = "*"
+        return parts
+    return {}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Fetch and process data.")
+    parser.add_argument("--use-cache", action="store_true", help="Use cached data if available")
+    return parser.parse_args()
 
 async def main():
     """
     Main function to orchestrate the fetching and processing of data.
     """
+    args = parse_args()
+    use_cache = args.use_cache
+
     try:
-        graph_auth_client = AuthClientGraph(
-            config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID
-        )
-        arm_auth_client = AuthClientARM(
-            config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID
-        )
+        graph_auth_client = AuthClientGraph()
+        arm_auth_client = AuthClientARM()
 
         logger.info("Fetching service principals...")
-        sps = await fetch_data(graph_auth_client, "servicePrincipals")
+        sps = await fetch_data(graph_auth_client, "servicePrincipals", use_cache=use_cache)
         sps_lookup = create_service_principal_lookup(sps)
 
         logger.info("Fetching application information...")
-        apps = await fetch_data(graph_auth_client, "applications")
+        apps = await fetch_data(graph_auth_client, "applications", use_cache=use_cache)
 
         app_infos = {}
         for app in apps:
@@ -336,11 +396,11 @@ async def main():
             if app_id not in app_infos:
                 app_infos[app_id] = create_app_info(app, sps_lookup)
             app_infos[app_id].federated_identity_credentials.extend(
-                await fetch_and_parse_credentials(graph_auth_client, app_id)
+                await fetch_and_parse_credentials(graph_auth_client, app_id, use_cache=use_cache)
             )
 
         logger.info("Fetching role assignments...")
-        role_assignments = fetch_role_assignments(arm_auth_client)
+        role_assignments = fetch_role_assignments(arm_auth_client, use_cache=use_cache)
 
         logger.info("Matching role assignments with application information...")
         matched_role_assignments = match_role_assignments(role_assignments, app_infos)
@@ -368,30 +428,35 @@ async def main():
                     action_id = f"{repo_id}:{action_type}:{action_value}"
                     neo4j_graph.add_node(action_id, f"Action {action_type} {action_value}", "github")
                     neo4j_graph.add_edge(repo_id, action_id, "Triggers")
-                    neo4j_graph.add_edge(action_id, app_info.id, f"Federated Credential {fc.name}")
+                    neo4j_graph.add_edge(action_id, app_info.id, f"Federated_Credential_{fc.name.replace(' ', '_')}")
 
             sp_id = app_info.enterprise_object_id
             neo4j_graph.add_node(sp_id, f"Service Principal {app_info.displayName}", "entra", {"enterpriseObjectId": sp_id, "roleName": ra.role_name})
-            neo4j_graph.add_edge(app_info.id, sp_id, "Associated with")
+            neo4j_graph.add_edge(app_info.id, sp_id, "Associated_with")
 
             scope_type = ra.scope_type
             if "managementGroups" in ra.scope:
                 scope_id = ra.management_group_id or ra.scope.split("/")[-1]
+                scope_label = "managementGroup"
             elif "resourceGroups" in ra.scope:
                 scope_id = ra.resource_group_id or ra.scope.split("/")[-1]
+                scope_label = "resourceGroup"
             elif "subscriptions" in ra.scope:
                 scope_id = ra.subscription_id or ra.scope.split("/")[-1]
+                scope_label = "subscription"
+            elif "providers" in ra.scope:
+                # This is a resource-level scope
+                scope_parts = ra.scope.split("/")
+                provider_index = scope_parts.index("providers")
+                resource_type = f"{scope_parts[provider_index + 1]}/{scope_parts[provider_index + 2]}"
+                scope_id = scope_parts[-1]
+                scope_label = resource_type  # e.g., "Microsoft.Storage/storageAccounts"
             else:
                 scope_id = "UnknownScope"
+                scope_label = "unknown"
 
-            if scope_id != "Unknown":
-                scope_name = scope_id.split("/")[-1]
-            else:
-                scope_name = "Unknown"
-
-            neo4j_graph.add_node(scope_id, f"{scope_type} {scope_name}", "azure")
-            role_name = ra.role_definition_id.split("/")[-1] if ra.role_definition_id else "Unknown Role"
-            neo4j_graph.add_edge(sp_id, scope_id, f"Role: {role_name}", {"roleDefinitionId": ra.role_definition_id})
+            neo4j_graph.add_node(scope_id, f"{scope_type} {scope_id.split('/')[-1]}", "azure")
+            neo4j_graph.add_edge(sp_id, scope_id, f"Role_{ra.role_name.replace(' ', '_').replace('-', '_')}")
 
         neo4j_graph.close()
 

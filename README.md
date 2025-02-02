@@ -1,49 +1,68 @@
-# oidc-code-to-cloud
+# Project Documentation
 
+## Overview
+This project fetches and processes data from Entra ID tenants to demonstrate attack paths using Neo4j. It is being released in connection with HackCon by O3 Cyber and is designed to illustrate potential security attack vectors using real-world tenant data.
 
-### /helpers/auth.py
-Class to authenticate to Azure REST and Microsoft Graph.
+## Architecture
+- **Data Sources:**  
+  - Microsoft Graph API for service principals and federated identity credentials.
+  - Azure Resource Manager (ARM) API for role assignments and resource group data.
+- **Data Flow:**  
+  1. Authenticate using either a `config.py` (client credentials) or Azure CLI.
+  2. Fetch service principals, applications, and federated credentials from Graph API.
+  3. Fetch subscriptions, resource groups, and role assignments from ARM API.
+  4. Match role assignments with application info (filtering for non-empty federated credentials).
+  5. Visualize the resulting security relationships as an attack path graph stored in Neo4j.
 
+## Modules
+- **/helpers/auth.py:**  
+  Provides authentication clients (`AuthClientGraph` and `AuthClientARM`) that use Azure Identity (DefaultAzureCredential) to obtain tokens.
+  
+- **/helpers/data_models.py:**  
+  Contains the data model definitions using dataclasses:
+  - `SubjectIdentifier`
+  - `FederatedIdentityCredential`
+  - `ApplicationInfo`
+  - `RoleAssignment`
+  - `AggregatedPermissionsObject`
 
-Example for getting all apps with Federated Credentials from Graph API: 
-```python
-if __name__ == "__main__":
-    graph_auth_client = AuthClientGraph(config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID)
-    arm_auth_client = AuthClientARM(config.CLIENT_ID, config.CLIENT_CREDENTIAL, config.TENANT_ID)
+- **/modules/graph_data.py:**  
+  Implements asynchronous functions to fetch data from Microsoft Graph API.  
+  Key functions: `get_graph_data` and `get_federated_credentials`.
 
-```
+- **/modules/arm_data.py:**  
+  Contains functions to query the ARM API for:
+  - Subscriptions
+  - Resource groups
+  - Role assignments (subscription, resource group, and management group levels)
+  
+- **/modules/neo4j_graph.py:**  
+  Manages the creation and management of nodes and edges in the Neo4j database to visualize attack paths.
 
-Depends on config.py 
-```
-CLIENT_ID = ""
-CLIENT_CREDENTIAL = ""
-TENANT_ID = ""
-```
+- **/main.py:**  
+  The orchestrator that ties all modules together. It handles caching, data fetching, role assignment matching, and finally, visualization of the attack paths in Neo4j.
 
-## main.py 
-Main script to fetch and process service principal data, role assignments, and federated identity credentials. The end result stored in the dataclass AggregatedPermissionsObject.
+## Authentication Methods
+You can choose between two methods to authenticate:
+- **Using `config.py`:**  
+  Create a configuration file (`config.py`) with your tenant credentials.
+- **Using Azure CLI:**  
+  Log in via Azure CLI with `az login` so that `DefaultAzureCredential` can pick up your credentials.
 
-1. Fetches service principals.
-2. Fetches application information and federated identity credentials.
-3. Fetches role assignments for subscriptions, resource groups, and management groups.
-4. Matches role assignments with application information to create aggregated permissions objects, filtering for non-empty federated identity credentials.
+## Caching Strategy
+Data fetched from both Graph and ARM APIs can be cached locally. Use the `--use-cache` flag when running `main.py` to load already fetched data. Running without the flag forces a fresh API call.
 
-### /modules/graph_data.py
-Module to interact with Microsoft Graph API.
+## Running the Project
+- **With cache:**  
+  ```bash
+  python main.py --use-cache
+  ```
+- **Without cache:**  
+  ```bash
+  python main.py
+  ```
 
-### /modules/federated_credential_parser.py
-Module to parse the string for federated credentials found on Service Principals
-
-### /modules/arm_data.py
-Module to interact with Azure Resource Manager (ARM) API. Distinct functions for each of the API calls used.
-
-### modules/attack_path_visualizer
-Module to visualize attack paths using networkx. 
-
-### modules/attack_path_narrator
-Module that narrates the attack paths using plain english.
-
-# Remaining:
-* Get data from GitHub using REST API and match the SubjectIdentifier to GitHub attributes
-* Consider if we want GitHub Controls in the first iteration or if we want to draw attack paths before we determine controls in GitHub.
-* Create a Function to determine weak configuration of FederatedCredentials and a Function to determine weak configuration of GitHub, example for GitHub (https://github.com/O3-Cyber/repoman/blob/main/package/config_scanner.py)
+## Future Work
+- Integrate GitHub data through the GitHub REST API and link it with the `SubjectIdentifier` for a broader attack surface.
+- Enhance role assignment matching by adding more contextual details.
+- Develop functions to evaluate and flag weak configurations in FederatedCredentials and GitHub settings.

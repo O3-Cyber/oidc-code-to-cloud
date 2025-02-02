@@ -39,6 +39,67 @@ class FederatedIdentityCredential:
     audiences: List[str]
     subject_identifier: Optional[SubjectIdentifier] = None
 
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "issuer": self.issuer,
+            "subject": self.subject,
+            "audiences": self.audiences,
+            "subject_identifier": self.subject_identifier.__dict__ if self.subject_identifier else None,
+        }
+
+    @staticmethod
+    def parse_subject_identifier(subject: str) -> Optional[SubjectIdentifier]:
+        """
+        Parse the subject identifier from the subject string of the Entra ID application.
+
+        Args:
+            subject (str): The subject string to parse.
+
+        Returns:
+            Optional[SubjectIdentifier]: The parsed subject identifier or None if parsing fails.
+
+        Example:
+            >>> subject = "repo:karimelmel/cloud-infra-as-code:pull_request"
+            >>> FederatedIdentityCredential.parse_subject_identifier(subject)
+            SubjectIdentifier(
+                organization='O3-Cyber',
+                repository='cloud-infra-as-code',
+                entity_type='pull_request',
+            )
+        """
+        parts = subject.split(":")
+        if len(parts) >= 3 and parts[0] == "repo":
+            org_repo = parts[1].split("/")
+            if len(org_repo) != 2:
+                return None
+
+            organization, repository = org_repo
+            entity_type = parts[2]
+            entity_name = ":".join(parts[3:]) if len(parts) > 3 else ""
+
+            # Handle special case for pull_request
+            if entity_type == "pull_request":
+                return SubjectIdentifier(
+                    organization=organization,
+                    repository=repository,
+                    entity_type="pull_request",
+                    entity_name="*",
+                )
+
+            # Handle refs case
+            if entity_type == "ref" and entity_name.startswith("refs/"):
+                entity_type = "branch"
+                entity_name = entity_name.replace("refs/heads/", "")
+
+            return SubjectIdentifier(
+                organization=organization,
+                repository=repository,
+                entity_type=entity_type,
+                entity_name=entity_name,
+            )
+        return None
+
 
 @dataclass
 class ApplicationInfo:
