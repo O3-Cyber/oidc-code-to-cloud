@@ -1,5 +1,5 @@
-aiohttp==3.11.11
+aiohttp==3.14.4
 azure-identity==1.25.3
 msal==1.39.0
 neo4j==5.27.0
-Requests==2.32.3
+Requests==2.33.0
